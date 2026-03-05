@@ -6,7 +6,11 @@ A turnkey demo workflow for [Parallel Works ACTIVATE](https://www.parallel.works
 
 ## Why Monte Carlo for Options Pricing?
 
-Closed-form solutions like Black-Scholes work well for simple European options, but most real-world derivatives don't have analytical formulas. **Monte Carlo simulation is the standard approach** for pricing complex options because it handles what closed-form models cannot:
+An option is a financial contract that gives the holder the right — but not the obligation — to buy or sell an asset at a set price before a certain date. Pricing an option means figuring out what that right is worth today, which requires reasoning about every possible future path the underlying asset's price could take.
+
+For the simplest options (e.g., standard European calls and puts), the Black-Scholes formula provides an exact answer. But most options traded in practice are more complex — their payoff may depend on the average price over time, whether the price ever crosses a barrier, or the behavior of multiple correlated assets. These "exotic" options have no closed-form solution.
+
+**Monte Carlo simulation** solves this by brute force: simulate thousands or millions of possible price paths, compute the payoff for each one, and average the results to get a fair price. It is the industry-standard method for pricing complex derivatives because it handles what closed-form models cannot:
 
 - **Path-dependent options** — Asian options depend on the *average* price over the life of the contract, not just the terminal price. There is no closed-form solution under standard geometric Brownian motion, so simulation is the practical method for pricing them.
 - **Barrier options** — Knock-out and knock-in options depend on whether the price *ever* crosses a threshold during the contract. Pricing these requires simulating the full path, not just the endpoint.
