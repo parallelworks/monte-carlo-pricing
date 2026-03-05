@@ -1,0 +1,535 @@
+# yaml-language-server: $schema=https://activate.parallel.works/workflow.schema.json
+---
+# Multi-Site Monte Carlo Option Pricing — prices exotic options across two compute sites
+# Live dashboard shows payoff histogram and price convergence in real-time
+
+permissions:
+  - "*"
+sessions:
+  session:
+    useTLS: false
+    redirect: true
+
+jobs:
+  # =============================================================================
+  # CHECKOUT — Clone scripts to both resources
+  # =============================================================================
+  checkout_onprem:
+    steps:
+      - name: Checkout scripts to on-prem resource
+        uses: parallelworks/checkout
+        ssh:
+          remoteHost: ${{ inputs.onprem_resource.ip }}
+        with:
+          repo: https://github.com/parallelworks/monte-carlo-pricing.git
+          branch: main
+          sparse_checkout:
+            - scripts
+
+  checkout_cloud:
+    needs: [checkout_onprem]
+    steps:
+      - name: Checkout scripts to cloud resource
+        uses: parallelworks/checkout
+        ssh:
+          remoteHost: ${{ inputs.cloud_resource.ip }}
+        with:
+          repo: https://github.com/parallelworks/monte-carlo-pricing.git
+          branch: main
+          sparse_checkout:
+            - scripts
+
+  # =============================================================================
+  # DASHBOARD — Start on on-prem resource (always-on, no scheduler)
+  # =============================================================================
+  start_dashboard:
+    needs: [checkout_onprem]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Run setup
+        run: |
+          set -e
+          cd scripts
+          bash setup.sh
+
+      - name: Launch dashboard
+        run: |
+          set -e
+          bash scripts/start_dashboard.sh
+
+  # =============================================================================
+  # WAIT FOR DASHBOARD — Poll for coordination files
+  # =============================================================================
+  wait_for_dashboard:
+    needs: [checkout_onprem]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Wait for dashboard ready
+        early-cancel: any-job-failed
+        run: |
+          set -e
+          JOB_DIR="${PW_PARENT_JOB_DIR%/}"
+          MAX_ATTEMPTS=100
+          INTERVAL=3
+
+          echo "Waiting for dashboard..."
+
+          # Wait for job.started
+          attempt=1
+          while [ ! -f "${JOB_DIR}/job.started" ]; do
+            [ -f "${JOB_DIR}/job.ended" ] && { echo "ERROR: Job ended before starting"; exit 1; }
+            echo "[${attempt}/${MAX_ATTEMPTS}] Waiting for job.started..."
+            sleep ${INTERVAL}
+            ((attempt++))
+            [ ${attempt} -gt ${MAX_ATTEMPTS} ] && { echo "ERROR: Timeout"; exit 1; }
+          done
+
+          # Wait for HOSTNAME and SESSION_PORT
+          for file in HOSTNAME SESSION_PORT; do
+            attempt=1
+            while [ ! -f "${JOB_DIR}/${file}" ]; do
+              echo "Waiting for ${file}..."
+              sleep 2
+              ((attempt++))
+              [ ${attempt} -gt 30 ] && { echo "ERROR: ${file} not found"; exit 1; }
+            done
+          done
+
+          HOSTNAME=$(cat "${JOB_DIR}/HOSTNAME")
+          SESSION_PORT=$(cat "${JOB_DIR}/SESSION_PORT")
+
+          # Wait for dashboard HTTP response
+          echo "Waiting for http://${HOSTNAME}:${SESSION_PORT}..."
+          attempt=1
+          while [ ${attempt} -le ${MAX_ATTEMPTS} ]; do
+            if curl -s --connect-timeout 5 "http://${HOSTNAME}:${SESSION_PORT}/" -o /dev/null 2>&1; then
+              echo "Dashboard is ready!"
+              echo "HOSTNAME=${HOSTNAME}" >> "${OUTPUTS}"
+              echo "SESSION_PORT=${SESSION_PORT}" >> "${OUTPUTS}"
+              exit 0
+            fi
+            [ -f "${JOB_DIR}/job.ended" ] && { echo "ERROR: Job ended"; exit 1; }
+            echo "[${attempt}/${MAX_ATTEMPTS}] Dashboard not ready..."
+            sleep ${INTERVAL}
+            ((attempt++))
+          done
+          echo "ERROR: Dashboard timeout"
+          exit 1
+
+  # =============================================================================
+  # UPDATE SESSION — Configure session proxy for dashboard
+  # =============================================================================
+  update_session:
+    needs: [wait_for_dashboard]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Get local port
+        run: |
+          local_port=$(pw agent open-port)
+          echo "local_port=${local_port}" | tee -a $OUTPUTS
+
+      - name: Update session
+        uses: parallelworks/update-session
+        with:
+          target: ${{ inputs.onprem_resource.id }}
+          name: ${{ sessions.session }}
+          remoteHost: ${{ needs.wait_for_dashboard.outputs.HOSTNAME }}
+          remotePort: ${{ needs.wait_for_dashboard.outputs.SESSION_PORT }}
+          local_port: ${{ needs.update_session.outputs.local_port }}
+
+  # =============================================================================
+  # CONFIGURE SIMULATION — Set option params and batch plan
+  # =============================================================================
+  configure_simulation:
+    needs: [wait_for_dashboard]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Configure simulation
+        run: |
+          DASHBOARD_HOST=$(cat "${PW_PARENT_JOB_DIR}/HOSTNAME")
+          DASHBOARD_PORT=$(cat "${PW_PARENT_JOB_DIR}/SESSION_PORT")
+          DASHBOARD_URL="http://${DASHBOARD_HOST}:${DASHBOARD_PORT}"
+
+          TOTAL_SIMULATIONS=${{ inputs.simulation_settings.total_simulations }}
+          BATCH_SIZE=${{ inputs.simulation_settings.batch_size }}
+          TOTAL_BATCHES=$(( (TOTAL_SIMULATIONS + BATCH_SIZE - 1) / BATCH_SIZE ))
+          HALF_BATCHES=$(( TOTAL_BATCHES / 2 ))
+
+          echo "Configuring simulation at ${DASHBOARD_URL}..."
+          echo "  Total simulations: ${TOTAL_SIMULATIONS}"
+          echo "  Batch size: ${BATCH_SIZE}"
+          echo "  Total batches: ${TOTAL_BATCHES}"
+          echo "  Half batches: ${HALF_BATCHES}"
+
+          # POST config to dashboard
+          curl -s -X POST "${DASHBOARD_URL}/api/config" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"option_type\": \"${{ inputs.simulation_settings.option_type }}\",
+              \"total_simulations\": ${TOTAL_SIMULATIONS},
+              \"batch_size\": ${BATCH_SIZE},
+              \"total_batches\": ${TOTAL_BATCHES},
+              \"spot_price\": ${{ inputs.simulation_settings.spot_price }},
+              \"strike_price\": ${{ inputs.simulation_settings.strike_price }},
+              \"volatility\": ${{ inputs.simulation_settings.volatility }},
+              \"risk_free_rate\": ${{ inputs.simulation_settings.risk_free_rate }},
+              \"time_to_expiry\": ${{ inputs.simulation_settings.time_to_expiry }},
+              \"barrier_level\": ${{ inputs.simulation_settings.barrier_level }},
+              \"monitoring_points\": ${{ inputs.simulation_settings.monitoring_points }}
+            }"
+
+          echo "DASHBOARD_URL=${DASHBOARD_URL}" >> "${OUTPUTS}"
+          echo "DASHBOARD_PORT=${DASHBOARD_PORT}" >> "${OUTPUTS}"
+          echo "TOTAL_BATCHES=${TOTAL_BATCHES}" >> "${OUTPUTS}"
+          echo "HALF_BATCHES=${HALF_BATCHES}" >> "${OUTPUTS}"
+          echo "TOTAL_SIMULATIONS=${TOTAL_SIMULATIONS}" >> "${OUTPUTS}"
+          echo "Simulation configured!"
+
+  # =============================================================================
+  # SIMULATE ON-PREM — Run first half of batches on on-prem resource
+  # =============================================================================
+  simulate_onprem:
+    needs: [configure_simulation, checkout_onprem]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Run simulation (on-prem)
+        run: |
+          set -e
+          export DASHBOARD_URL="${{ needs.configure_simulation.outputs.DASHBOARD_URL }}"
+          export SITE_ID="site-1"
+          export BATCH_START=0
+          export BATCH_END="${{ needs.configure_simulation.outputs.HALF_BATCHES }}"
+          export BATCH_SIZE="${{ inputs.simulation_settings.batch_size }}"
+          export OPTION_TYPE="${{ inputs.simulation_settings.option_type }}"
+          export SPOT_PRICE="${{ inputs.simulation_settings.spot_price }}"
+          export STRIKE_PRICE="${{ inputs.simulation_settings.strike_price }}"
+          export VOLATILITY="${{ inputs.simulation_settings.volatility }}"
+          export RISK_FREE_RATE="${{ inputs.simulation_settings.risk_free_rate }}"
+          export TIME_TO_EXPIRY="${{ inputs.simulation_settings.time_to_expiry }}"
+          export BARRIER_LEVEL="${{ inputs.simulation_settings.barrier_level }}"
+          export MONITORING_POINTS="${{ inputs.simulation_settings.monitoring_points }}"
+          PARALLELISM="${{ inputs.simulation_settings.parallelism }}"
+          [ "${PARALLELISM}" != "auto" ] && export NUM_WORKERS="${PARALLELISM}"
+
+          bash scripts/run_simulation.sh
+
+  # =============================================================================
+  # TUNNEL — Reverse SSH tunnel from on-prem to cloud for dashboard access
+  # =============================================================================
+  setup_tunnel:
+    needs: [configure_simulation, checkout_cloud]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Create reverse tunnel to cloud
+        run: |
+          set -e
+          export DASHBOARD_PORT=${{ needs.configure_simulation.outputs.DASHBOARD_PORT }}
+          bash scripts/setup_tunnel.sh
+
+  # =============================================================================
+  # WAIT FOR TUNNEL — Poll for tunnel coordination file
+  # =============================================================================
+  wait_for_tunnel:
+    needs: [configure_simulation]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Wait for tunnel ready
+        early-cancel: any-job-failed
+        run: |
+          set -e
+          JOB_DIR="${PW_PARENT_JOB_DIR%/}"
+
+          echo "Waiting for tunnel..."
+          attempt=1
+          while [ ! -f "${JOB_DIR}/TUNNEL_PORT" ]; do
+            echo "[${attempt}/60] Waiting for TUNNEL_PORT..."
+            sleep 2
+            ((attempt++))
+            [ ${attempt} -gt 60 ] && { echo "ERROR: Tunnel timeout"; exit 1; }
+          done
+          TUNNEL_PORT=$(cat "${JOB_DIR}/TUNNEL_PORT")
+          echo "Tunnel port: ${TUNNEL_PORT}"
+          echo "TUNNEL_PORT=${TUNNEL_PORT}" >> "${OUTPUTS}"
+
+  # =============================================================================
+  # SIMULATE CLOUD — Run second half of batches on cloud resource
+  # =============================================================================
+  simulate_cloud:
+    needs: [configure_simulation, checkout_cloud, wait_for_tunnel]
+    ssh:
+      remoteHost: ${{ inputs.cloud_resource.ip }}
+    steps:
+      - name: Run setup on cloud
+        run: |
+          set -e
+          cd scripts
+          bash setup.sh
+
+      - name: Run simulation (cloud)
+        early-cancel: any-job-failed
+        run: |
+          set -e
+          # Try direct dashboard URL first (works when on same host / workspace)
+          # Fall back to reverse tunnel (needed when running on actual cloud resource)
+          DIRECT_URL="${{ needs.configure_simulation.outputs.DASHBOARD_URL }}"
+          TUNNEL_URL="http://localhost:${{ needs.wait_for_tunnel.outputs.TUNNEL_PORT }}"
+
+          if curl -s --connect-timeout 3 "${DIRECT_URL}/api/state" -o /dev/null 2>&1; then
+            export DASHBOARD_URL="${DIRECT_URL}"
+            echo "Using direct dashboard URL: ${DASHBOARD_URL}"
+          else
+            export DASHBOARD_URL="${TUNNEL_URL}"
+            echo "Direct URL unreachable, using tunnel: ${DASHBOARD_URL}"
+          fi
+
+          export SITE_ID="site-2"
+          export BATCH_START="${{ needs.configure_simulation.outputs.HALF_BATCHES }}"
+          export BATCH_END="${{ needs.configure_simulation.outputs.TOTAL_BATCHES }}"
+          export BATCH_SIZE="${{ inputs.simulation_settings.batch_size }}"
+          export OPTION_TYPE="${{ inputs.simulation_settings.option_type }}"
+          export SPOT_PRICE="${{ inputs.simulation_settings.spot_price }}"
+          export STRIKE_PRICE="${{ inputs.simulation_settings.strike_price }}"
+          export VOLATILITY="${{ inputs.simulation_settings.volatility }}"
+          export RISK_FREE_RATE="${{ inputs.simulation_settings.risk_free_rate }}"
+          export TIME_TO_EXPIRY="${{ inputs.simulation_settings.time_to_expiry }}"
+          export BARRIER_LEVEL="${{ inputs.simulation_settings.barrier_level }}"
+          export MONITORING_POINTS="${{ inputs.simulation_settings.monitoring_points }}"
+          PARALLELISM="${{ inputs.simulation_settings.parallelism }}"
+          [ "${PARALLELISM}" != "auto" ] && export NUM_WORKERS="${PARALLELISM}"
+
+          bash scripts/run_simulation.sh
+
+  # =============================================================================
+  # COMPLETE — Wait for both simulators, print summary
+  # =============================================================================
+  complete:
+    needs: [simulate_onprem, simulate_cloud, update_session, configure_simulation]
+    steps:
+      - name: Workflow complete
+        run: |
+          basepath="/me/session/${PW_USER}/${{ sessions.session }}"
+          local_port="${{ needs.update_session.outputs.local_port }}"
+          echo "=========================================="
+          echo "Multi-Site Monte Carlo Pricing Complete!"
+          echo "=========================================="
+          echo "  Option type: ${{ inputs.simulation_settings.option_type }}"
+          echo "  Total simulations: ${{ needs.configure_simulation.outputs.TOTAL_SIMULATIONS }}"
+          echo "  Total batches: ${{ needs.configure_simulation.outputs.TOTAL_BATCHES }}"
+          echo ""
+          echo "  Dashboard: https://${PW_PLATFORM_HOST}${basepath}/"
+          echo "  Local tunnel: ssh -L ${local_port}:localhost:${local_port} -o ProxyCommand=\"pw ssh --proxy-command %h\" ${PW_USER}@workspace"
+          echo "  Then access: http://localhost:${local_port}/"
+          echo "=========================================="
+
+"on":
+  execute:
+    inputs:
+      # -----------------------------------------------------------------------
+      # Resources
+      # -----------------------------------------------------------------------
+      onprem_resource:
+        type: compute-clusters
+        label: On-Prem Resource (Dashboard + Simulate)
+        tooltip: Always-on resource for dashboard and half of simulation (e.g., a30gpu). Runs via SSH (no scheduler).
+        include-workspace: false
+        autoselect: true
+
+      cloud_resource:
+        type: compute-clusters
+        label: Cloud Resource (Simulate)
+        tooltip: Cloud cluster for the other half of simulation (e.g., googlerockyv3). Can use Slurm scheduler.
+        include-workspace: false
+
+      # -----------------------------------------------------------------------
+      # Simulation Settings
+      # -----------------------------------------------------------------------
+      simulation_settings:
+        type: group
+        label: Simulation Settings
+        items:
+          option_type:
+            type: dropdown
+            label: Option Type
+            tooltip: Type of exotic option to price
+            default: asian_call
+            options:
+              - value: asian_call
+                label: Asian Call (arithmetic average)
+              - value: asian_put
+                label: Asian Put (arithmetic average)
+              - value: european_call
+                label: European Call (Black-Scholes benchmark)
+              - value: european_put
+                label: European Put (Black-Scholes benchmark)
+              - value: barrier_up_and_out_call
+                label: Barrier Up-and-Out Call
+
+          total_simulations:
+            type: dropdown
+            label: Total Simulations
+            tooltip: Total number of Monte Carlo paths to simulate across both sites
+            default: "500000"
+            options:
+              - value: "100000"
+                label: "100K paths (quick test)"
+              - value: "500000"
+                label: "500K paths (default)"
+              - value: "1000000"
+                label: "1M paths (accurate)"
+              - value: "5000000"
+                label: "5M paths (high accuracy)"
+              - value: "10000000"
+                label: "10M paths (research grade)"
+
+          batch_size:
+            type: dropdown
+            label: Batch Size
+            tooltip: Number of paths per batch (smaller = more frequent dashboard updates)
+            default: "10000"
+            options:
+              - value: "5000"
+                label: "5K paths/batch (frequent updates)"
+              - value: "10000"
+                label: "10K paths/batch (default)"
+              - value: "25000"
+                label: "25K paths/batch (fewer updates)"
+              - value: "50000"
+                label: "50K paths/batch (large batches)"
+
+          spot_price:
+            type: number
+            label: Spot Price (S0)
+            tooltip: Current price of the underlying asset
+            default: 100
+            min: 1
+
+          strike_price:
+            type: number
+            label: Strike Price (K)
+            tooltip: Option strike price
+            default: 100
+            min: 1
+
+          volatility:
+            type: number
+            label: Volatility (sigma)
+            tooltip: Annualized volatility (e.g., 0.2 = 20%)
+            default: 0.2
+            min: 0.01
+            max: 2.0
+
+          risk_free_rate:
+            type: number
+            label: Risk-Free Rate (r)
+            tooltip: Annualized risk-free interest rate (e.g., 0.05 = 5%)
+            default: 0.05
+            min: 0
+            max: 1.0
+
+          time_to_expiry:
+            type: number
+            label: Time to Expiry (T)
+            tooltip: Time to option expiry in years
+            default: 1.0
+            min: 0.01
+
+          barrier_level:
+            type: number
+            label: Barrier Level
+            tooltip: Barrier level for barrier options (ignored for non-barrier types)
+            default: 150
+            min: 1
+
+          monitoring_points:
+            type: number
+            label: Monitoring Points
+            tooltip: Number of time steps for path simulation (252 = daily for 1 year)
+            default: 252
+            min: 10
+            max: 1000
+
+          parallelism:
+            type: dropdown
+            label: Worker Threads
+            tooltip: Number of parallel simulation processes per site. Auto uses all available CPU cores.
+            default: "auto"
+            options:
+              - value: "auto"
+                label: "Auto (all cores)"
+              - value: "1"
+                label: "Single-threaded"
+              - value: "4"
+                label: "4 workers"
+              - value: "8"
+                label: "8 workers"
+
+      # -----------------------------------------------------------------------
+      # Scheduler
+      # -----------------------------------------------------------------------
+      submit_cloud_to_scheduler:
+        type: boolean
+        label: Submit Cloud Job to Scheduler
+        tooltip: Enable to submit the cloud simulation job via SLURM. Disable for direct SSH execution.
+        default: false
+        hidden: ${{ inputs.cloud_resource.schedulerType != 'slurm' && inputs.cloud_resource.schedulerType != 'pbs' }}
+
+      slurm:
+        type: group
+        label: SLURM Configuration (Cloud)
+        hidden: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+        collapsed: true
+        items:
+          is_disabled:
+            type: boolean
+            default: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+            hidden: true
+
+          account:
+            label: Account
+            type: slurm-accounts
+            resource: ${{ inputs.cloud_resource }}
+            tooltip: SLURM account (--account)
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          partition:
+            type: slurm-partitions
+            label: Partition
+            optional: true
+            resource: ${{ inputs.cloud_resource }}
+            tooltip: Partition (--partition)
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          qos:
+            label: QoS
+            type: slurm-qos
+            resource: ${{ inputs.cloud_resource }}
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          cpus_per_task:
+            type: number
+            label: CPUs per Task
+            min: 1
+            max: 256
+            default: 1
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          time:
+            label: Walltime
+            type: string
+            default: 01:00:00
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          scheduler_directives:
+            type: editor
+            label: Additional Directives
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}

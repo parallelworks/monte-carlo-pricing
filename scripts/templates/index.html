@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monte Carlo Option Pricing</title>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --panel: #141a28;
+    --border: #1e2a3a;
+    --text: #e0e6f0;
+    --dim: #6b7a90;
+    --cloud: #3b82f6;
+    --onprem: #f59e0b;
+    --accent: #22d3ee;
+    --green: #22c55e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .header {
+    padding: 1.2rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header h1 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .header h1 span { color: var(--accent); }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    font-size: 0.85rem;
+    color: var(--dim);
+  }
+  .legend {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+    height: calc(100vh - 60px);
+  }
+  .charts-area {
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem 2rem;
+    gap: 1.5rem;
+    overflow: hidden;
+  }
+  .chart-container {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+  }
+  .chart-container.histogram { flex: 1.2; }
+  .chart-container.convergence { flex: 1; }
+  .chart-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    margin-bottom: 0.5rem;
+  }
+  .chart-canvas-wrap {
+    width: 100%;
+    height: calc(100% - 24px);
+    position: relative;
+  }
+  .chart-canvas-wrap canvas {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .sidebar {
+    border-left: 1px solid var(--border);
+    padding: 1.5rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+  }
+  .card-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    margin-bottom: 0.8rem;
+  }
+  .progress-bar-outer {
+    width: 100%;
+    height: 24px;
+    background: var(--bg);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-bar-inner {
+    height: 100%;
+    border-radius: 12px;
+    background: linear-gradient(90deg, var(--cloud), var(--accent));
+    transition: width 0.3s ease;
+    min-width: 0;
+  }
+  .progress-label {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: white;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  }
+  .estimate-card {
+    text-align: center;
+    padding: 0.5rem 0;
+  }
+  .estimate-price {
+    font-size: 2.2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    line-height: 1.2;
+  }
+  .estimate-ci {
+    font-size: 0.8rem;
+    color: var(--dim);
+    margin-top: 0.3rem;
+  }
+  .estimate-detail {
+    font-size: 0.75rem;
+    color: var(--dim);
+    margin-top: 0.2rem;
+  }
+  .param-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+  .param-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.3rem 0.5rem;
+    background: var(--bg);
+    border-radius: 4px;
+    font-size: 0.75rem;
+  }
+  .param-label { color: var(--dim); }
+  .param-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .site-card {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.7rem;
+    background: var(--bg);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+  }
+  .site-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+  .site-info { flex: 1; }
+  .site-name { font-size: 0.85rem; font-weight: 600; }
+  .site-detail { font-size: 0.7rem; color: var(--dim); }
+  .site-count {
+    font-size: 1.2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .throughput-chart {
+    width: 100%;
+    height: 80px;
+    position: relative;
+  }
+  #throughput-canvas {
+    width: 100%;
+    height: 100%;
+  }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+  .status-badge.waiting { background: rgba(107,122,144,0.2); color: var(--dim); }
+  .status-badge.running { background: rgba(34,211,238,0.15); color: var(--accent); }
+  .status-badge.complete { background: rgba(34,197,94,0.15); color: #22c55e; }
+  .pulse {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1><span>ACTIVATE</span> Monte Carlo Option Pricing</h1>
+  <div class="header-right">
+    <div class="legend" id="header-legend">
+      <div class="legend-item">
+        <div class="legend-dot" style="background:var(--dim)"></div>
+        <span>Waiting for sites...</span>
+      </div>
+    </div>
+    <div id="status-badge" class="status-badge waiting">
+      <div class="pulse" style="background:currentColor"></div>
+      Waiting
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="charts-area">
+    <div class="chart-container histogram">
+      <div class="chart-label">Payoff Distribution</div>
+      <div class="chart-canvas-wrap">
+        <canvas id="histogram-canvas"></canvas>
+      </div>
+    </div>
+    <div class="chart-container convergence">
+      <div class="chart-label">Price Convergence</div>
+      <div class="chart-canvas-wrap">
+        <canvas id="convergence-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <!-- Progress -->
+    <div class="card">
+      <div class="card-title">Progress</div>
+      <div class="progress-bar-outer">
+        <div id="progress-bar" class="progress-bar-inner" style="width:0%"></div>
+        <div id="progress-label" class="progress-label">0 / 0 paths</div>
+      </div>
+    </div>
+
+    <!-- Current Estimate -->
+    <div class="card">
+      <div class="card-title">Current Estimate</div>
+      <div class="estimate-card">
+        <div class="estimate-price" id="est-price">--</div>
+        <div class="estimate-ci" id="est-ci">95% CI: -- to --</div>
+        <div class="estimate-detail" id="est-detail">0 paths &middot; SE: --</div>
+      </div>
+    </div>
+
+    <!-- Option Parameters -->
+    <div class="card">
+      <div class="card-title">Option Parameters</div>
+      <div class="param-grid" id="param-grid">
+        <div class="param-item"><span class="param-label">Type</span><span class="param-value" id="p-type">--</span></div>
+        <div class="param-item"><span class="param-label">S0</span><span class="param-value" id="p-spot">--</span></div>
+        <div class="param-item"><span class="param-label">K</span><span class="param-value" id="p-strike">--</span></div>
+        <div class="param-item"><span class="param-label">&sigma;</span><span class="param-value" id="p-vol">--</span></div>
+        <div class="param-item"><span class="param-label">r</span><span class="param-value" id="p-rate">--</span></div>
+        <div class="param-item"><span class="param-label">T</span><span class="param-value" id="p-expiry">--</span></div>
+      </div>
+    </div>
+
+    <!-- Compute Sites -->
+    <div class="card">
+      <div class="card-title">Compute Sites</div>
+      <div id="sites-container">
+        <div class="site-card" style="opacity: 0.4;">
+          <div class="site-icon" style="background:rgba(59,130,246,0.15); color:var(--cloud);">&#9729;</div>
+          <div class="site-info">
+            <div class="site-name">Waiting for batches...</div>
+            <div class="site-detail">Sites appear as batches arrive</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Throughput -->
+    <div class="card">
+      <div class="card-title">Throughput (batches/sec)</div>
+      <div class="throughput-chart">
+        <canvas id="throughput-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SITE_COLORS = {};
+const COLOR_PALETTE = ['#3b82f6', '#f59e0b', '#22c55e', '#ef4444', '#a855f7', '#ec4899'];
+let colorIdx = 0;
+function getSiteColor(siteId) {
+  if (!SITE_COLORS[siteId]) {
+    SITE_COLORS[siteId] = COLOR_PALETTE[colorIdx % COLOR_PALETTE.length];
+    colorIdx++;
+  }
+  return SITE_COLORS[siteId];
+}
+
+function updateHeaderLegend() {
+  const legend = document.getElementById('header-legend');
+  const siteIds = Object.keys(siteStats);
+  if (siteIds.length === 0) return;
+  legend.innerHTML = siteIds.map(siteId => {
+    const s = siteStats[siteId];
+    const color = getSiteColor(siteId);
+    const label = s.cluster_name || siteId;
+    return `<div class="legend-item">
+      <div class="legend-dot" style="background:${color}"></div>
+      <span>${label}</span>
+    </div>`;
+  }).join('');
+}
+
+// State
+let config = null;
+let totalPaths = 0;
+let totalBatches = 0;
+let plannedBatches = 0;
+let plannedPaths = 0;
+let currentMean = 0;
+let stdErr = 0;
+let ciLow = 0;
+let ciHigh = 0;
+let histogramCounts = null;
+let histogramEdges = null;
+let convergenceData = [];  // [{paths, mean, ci_low, ci_high}]
+let bsPrice = null;
+let startTime = null;
+const siteStats = {};
+const throughputHistory = [];
+let lastThroughputCheck = null;
+let lastBatchCounts = {};
+
+// --- Histogram Canvas ---
+const hCanvas = document.getElementById('histogram-canvas');
+const hCtx = hCanvas.getContext('2d');
+
+function drawHistogram() {
+  const rect = hCanvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  hCanvas.width = rect.width * dpr;
+  hCanvas.height = rect.height * dpr;
+  hCtx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+
+  hCtx.fillStyle = '#0a0e17';
+  hCtx.fillRect(0, 0, w, h);
+
+  if (!histogramCounts || !histogramEdges) return;
+
+  const pad = { left: 60, right: 20, top: 20, bottom: 40 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+
+  const maxCount = Math.max(...histogramCounts, 1);
+  const nBins = histogramCounts.length;
+  const barW = plotW / nBins;
+
+  // Draw axes
+  hCtx.strokeStyle = '#1e2a3a';
+  hCtx.lineWidth = 1;
+  hCtx.beginPath();
+  hCtx.moveTo(pad.left, pad.top);
+  hCtx.lineTo(pad.left, pad.top + plotH);
+  hCtx.lineTo(pad.left + plotW, pad.top + plotH);
+  hCtx.stroke();
+
+  // Draw bars
+  for (let i = 0; i < nBins; i++) {
+    const count = histogramCounts[i];
+    const barH = (count / maxCount) * plotH;
+    const x = pad.left + i * barW;
+    const y = pad.top + plotH - barH;
+
+    // Gradient color based on position
+    const t = i / nBins;
+    const r = Math.round(59 + t * (34 - 59));
+    const g = Math.round(130 + t * (211 - 130));
+    const b = Math.round(246 + t * (238 - 246));
+    hCtx.fillStyle = `rgba(${r},${g},${b},0.8)`;
+    hCtx.fillRect(x, y, barW - 1, barH);
+  }
+
+  // Draw current price estimate line
+  if (currentMean > 0 && histogramEdges) {
+    const minEdge = histogramEdges[0];
+    const maxEdge = histogramEdges[histogramEdges.length - 1];
+    const range = maxEdge - minEdge;
+    if (range > 0) {
+      const xPos = pad.left + ((currentMean - minEdge) / range) * plotW;
+      if (xPos >= pad.left && xPos <= pad.left + plotW) {
+        hCtx.setLineDash([5, 3]);
+        hCtx.strokeStyle = '#22d3ee';
+        hCtx.lineWidth = 2;
+        hCtx.beginPath();
+        hCtx.moveTo(xPos, pad.top);
+        hCtx.lineTo(xPos, pad.top + plotH);
+        hCtx.stroke();
+        hCtx.setLineDash([]);
+
+        // Label
+        hCtx.fillStyle = '#22d3ee';
+        hCtx.font = '11px Inter, system-ui, sans-serif';
+        hCtx.textAlign = 'center';
+        hCtx.fillText('$' + currentMean.toFixed(2), xPos, pad.top - 5);
+      }
+    }
+  }
+
+  // X-axis labels
+  hCtx.fillStyle = '#6b7a90';
+  hCtx.font = '10px Inter, system-ui, sans-serif';
+  hCtx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(nBins / 6));
+  for (let i = 0; i <= nBins; i += labelStep) {
+    if (i < histogramEdges.length) {
+      const x = pad.left + i * barW;
+      hCtx.fillText('$' + histogramEdges[i].toFixed(1), x, pad.top + plotH + 16);
+    }
+  }
+
+  // Y-axis labels
+  hCtx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const val = Math.round(maxCount * (i / 4));
+    const y = pad.top + plotH - (i / 4) * plotH;
+    hCtx.fillText(val.toLocaleString(), pad.left - 8, y + 4);
+    // Grid line
+    hCtx.strokeStyle = 'rgba(30,42,58,0.5)';
+    hCtx.lineWidth = 0.5;
+    hCtx.beginPath();
+    hCtx.moveTo(pad.left, y);
+    hCtx.lineTo(pad.left + plotW, y);
+    hCtx.stroke();
+  }
+
+  // Axis labels
+  hCtx.fillStyle = '#6b7a90';
+  hCtx.font = '10px Inter, system-ui, sans-serif';
+  hCtx.textAlign = 'center';
+  hCtx.fillText('Discounted Payoff', pad.left + plotW / 2, h - 4);
+
+  hCtx.save();
+  hCtx.translate(12, pad.top + plotH / 2);
+  hCtx.rotate(-Math.PI / 2);
+  hCtx.fillText('Count', 0, 0);
+  hCtx.restore();
+}
+
+// --- Convergence Canvas ---
+const cCanvas = document.getElementById('convergence-canvas');
+const cCtx = cCanvas.getContext('2d');
+
+function drawConvergence() {
+  const rect = cCanvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cCanvas.width = rect.width * dpr;
+  cCanvas.height = rect.height * dpr;
+  cCtx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+
+  cCtx.fillStyle = '#0a0e17';
+  cCtx.fillRect(0, 0, w, h);
+
+  if (convergenceData.length < 1) return;
+
+  const pad = { left: 60, right: 20, top: 20, bottom: 40 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+
+  const data = convergenceData;
+  const maxPaths = data[data.length - 1].paths || 1;
+
+  // Determine Y range from CI bounds
+  let minY = Infinity, maxY = -Infinity;
+  data.forEach(d => {
+    if (d.ci_low < minY) minY = d.ci_low;
+    if (d.ci_high > maxY) maxY = d.ci_high;
+  });
+  if (bsPrice !== null) {
+    if (bsPrice < minY) minY = bsPrice;
+    if (bsPrice > maxY) maxY = bsPrice;
+  }
+  const yPad = (maxY - minY) * 0.15 || 1;
+  minY -= yPad;
+  maxY += yPad;
+  const yRange = maxY - minY || 1;
+
+  function toX(paths) { return pad.left + (paths / maxPaths) * plotW; }
+  function toY(val) { return pad.top + plotH - ((val - minY) / yRange) * plotH; }
+
+  // Draw axes
+  cCtx.strokeStyle = '#1e2a3a';
+  cCtx.lineWidth = 1;
+  cCtx.beginPath();
+  cCtx.moveTo(pad.left, pad.top);
+  cCtx.lineTo(pad.left, pad.top + plotH);
+  cCtx.lineTo(pad.left + plotW, pad.top + plotH);
+  cCtx.stroke();
+
+  // Draw CI band
+  cCtx.fillStyle = 'rgba(34,211,238,0.12)';
+  cCtx.beginPath();
+  cCtx.moveTo(toX(data[0].paths), toY(data[0].ci_high));
+  data.forEach(d => cCtx.lineTo(toX(d.paths), toY(d.ci_high)));
+  for (let i = data.length - 1; i >= 0; i--) {
+    cCtx.lineTo(toX(data[i].paths), toY(data[i].ci_low));
+  }
+  cCtx.closePath();
+  cCtx.fill();
+
+  // Draw CI upper and lower lines
+  cCtx.strokeStyle = 'rgba(34,211,238,0.3)';
+  cCtx.lineWidth = 1;
+  cCtx.setLineDash([3, 3]);
+  cCtx.beginPath();
+  data.forEach((d, i) => { i === 0 ? cCtx.moveTo(toX(d.paths), toY(d.ci_high)) : cCtx.lineTo(toX(d.paths), toY(d.ci_high)); });
+  cCtx.stroke();
+  cCtx.beginPath();
+  data.forEach((d, i) => { i === 0 ? cCtx.moveTo(toX(d.paths), toY(d.ci_low)) : cCtx.lineTo(toX(d.paths), toY(d.ci_low)); });
+  cCtx.stroke();
+  cCtx.setLineDash([]);
+
+  // Draw mean line
+  cCtx.strokeStyle = '#22d3ee';
+  cCtx.lineWidth = 2;
+  cCtx.beginPath();
+  data.forEach((d, i) => { i === 0 ? cCtx.moveTo(toX(d.paths), toY(d.mean)) : cCtx.lineTo(toX(d.paths), toY(d.mean)); });
+  cCtx.stroke();
+
+  // Black-Scholes reference line
+  if (bsPrice !== null) {
+    cCtx.strokeStyle = '#22c55e';
+    cCtx.lineWidth = 1.5;
+    cCtx.setLineDash([6, 4]);
+    const bsY = toY(bsPrice);
+    cCtx.beginPath();
+    cCtx.moveTo(pad.left, bsY);
+    cCtx.lineTo(pad.left + plotW, bsY);
+    cCtx.stroke();
+    cCtx.setLineDash([]);
+
+    // Label
+    cCtx.fillStyle = '#22c55e';
+    cCtx.font = '10px Inter, system-ui, sans-serif';
+    cCtx.textAlign = 'left';
+    cCtx.fillText('BS: $' + bsPrice.toFixed(2), pad.left + plotW - 70, bsY - 5);
+  }
+
+  // X-axis labels
+  cCtx.fillStyle = '#6b7a90';
+  cCtx.font = '10px Inter, system-ui, sans-serif';
+  cCtx.textAlign = 'center';
+  for (let i = 0; i <= 5; i++) {
+    const paths = Math.round(maxPaths * i / 5);
+    const x = toX(paths);
+    let label;
+    if (paths >= 1000000) label = (paths / 1000000).toFixed(1) + 'M';
+    else if (paths >= 1000) label = (paths / 1000).toFixed(0) + 'K';
+    else label = paths.toString();
+    cCtx.fillText(label, x, pad.top + plotH + 16);
+  }
+
+  // Y-axis labels
+  cCtx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const val = minY + (i / 4) * yRange;
+    const y = toY(val);
+    cCtx.fillText('$' + val.toFixed(2), pad.left - 8, y + 4);
+    cCtx.strokeStyle = 'rgba(30,42,58,0.5)';
+    cCtx.lineWidth = 0.5;
+    cCtx.beginPath();
+    cCtx.moveTo(pad.left, y);
+    cCtx.lineTo(pad.left + plotW, y);
+    cCtx.stroke();
+  }
+
+  // Axis labels
+  cCtx.fillStyle = '#6b7a90';
+  cCtx.font = '10px Inter, system-ui, sans-serif';
+  cCtx.textAlign = 'center';
+  cCtx.fillText('Total Paths Simulated', pad.left + plotW / 2, h - 4);
+
+  cCtx.save();
+  cCtx.translate(12, pad.top + plotH / 2);
+  cCtx.rotate(-Math.PI / 2);
+  cCtx.fillText('Price Estimate ($)', 0, 0);
+  cCtx.restore();
+}
+
+// --- Throughput Canvas ---
+const tCanvas = document.getElementById('throughput-canvas');
+const tCtx = tCanvas.getContext('2d');
+
+function drawThroughput() {
+  const rect = tCanvas.getBoundingClientRect();
+  tCanvas.width = rect.width * window.devicePixelRatio;
+  tCanvas.height = rect.height * window.devicePixelRatio;
+  tCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  const w = rect.width, h = rect.height;
+  const pad = 4;
+  const plotH = h - pad;
+
+  tCtx.fillStyle = '#0a0e17';
+  tCtx.fillRect(0, 0, w, h);
+
+  if (throughputHistory.length < 1) return;
+
+  const points = throughputHistory.slice(-60);
+  const sites = Object.keys(SITE_COLORS);
+
+  let maxVal = 1;
+  points.forEach(p => {
+    let stacked = 0;
+    sites.forEach(s => { stacked += (p.perSite[s] || 0); });
+    if (stacked > maxVal) maxVal = stacked;
+  });
+
+  const barW = Math.max(Math.floor(w / Math.max(points.length, 1)) - 1, 3);
+  const gap = Math.max(Math.floor((w - barW * points.length) / Math.max(points.length, 1)), 1);
+
+  points.forEach((p, i) => {
+    const x = i * (barW + gap);
+    let yBottom = h;
+    sites.forEach(siteId => {
+      const val = p.perSite[siteId] || 0;
+      if (val <= 0) return;
+      const barH = Math.max((val / maxVal) * plotH, 1);
+      const color = getSiteColor(siteId);
+      tCtx.fillStyle = color + 'aa';
+      tCtx.fillRect(x, yBottom - barH, barW, barH);
+      yBottom -= barH;
+    });
+  });
+
+  if (points.length >= 2) {
+    sites.forEach(siteId => {
+      const color = getSiteColor(siteId);
+      tCtx.beginPath();
+      points.forEach((p, i) => {
+        const x = i * (barW + gap) + barW / 2;
+        const val = p.perSite[siteId] || 0;
+        const y = h - (val / maxVal) * plotH;
+        if (i === 0) tCtx.moveTo(x, y);
+        else tCtx.lineTo(x, y);
+      });
+      tCtx.strokeStyle = color;
+      tCtx.lineWidth = 1.5;
+      tCtx.stroke();
+    });
+  }
+}
+
+function updateConfig(cfg) {
+  if (!cfg) return;
+  config = cfg;
+  const typeNames = {
+    asian_call: 'Asian Call', asian_put: 'Asian Put',
+    european_call: 'European Call', european_put: 'European Put',
+    barrier_up_and_out_call: 'Barrier U&O Call'
+  };
+  document.getElementById('p-type').textContent = typeNames[cfg.option_type] || cfg.option_type;
+  document.getElementById('p-spot').textContent = '$' + (cfg.spot_price || 0);
+  document.getElementById('p-strike').textContent = '$' + (cfg.strike_price || 0);
+  document.getElementById('p-vol').textContent = (cfg.volatility || 0) * 100 + '%';
+  document.getElementById('p-rate').textContent = (cfg.risk_free_rate || 0) * 100 + '%';
+  document.getElementById('p-expiry').textContent = (cfg.time_to_expiry || 0) + 'y';
+}
+
+function updateUI(elapsed_s) {
+  // Progress
+  const pct = plannedPaths > 0 ? (totalPaths / plannedPaths * 100) : 0;
+  document.getElementById('progress-bar').style.width = Math.min(pct, 100) + '%';
+  const fmtPaths = n => n >= 1000000 ? (n/1e6).toFixed(1)+'M' : n >= 1000 ? (n/1e3).toFixed(0)+'K' : n;
+  document.getElementById('progress-label').textContent =
+    `${fmtPaths(totalPaths)} / ${fmtPaths(plannedPaths)} paths (${Math.round(pct)}%)`;
+
+  // Estimate
+  if (totalPaths > 0) {
+    document.getElementById('est-price').textContent = '$' + currentMean.toFixed(4);
+    document.getElementById('est-ci').textContent = `95% CI: $${ciLow.toFixed(4)} to $${ciHigh.toFixed(4)}`;
+    document.getElementById('est-detail').textContent =
+      `${fmtPaths(totalPaths)} paths \u00b7 SE: $${stdErr.toFixed(6)}`;
+  }
+
+  // Status badge
+  const badge = document.getElementById('status-badge');
+  if (totalBatches === 0) {
+    badge.className = 'status-badge waiting';
+    badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> Waiting';
+  } else if (totalBatches < plannedBatches) {
+    badge.className = 'status-badge running';
+    badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> Simulating';
+  } else {
+    badge.className = 'status-badge complete';
+    badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> Complete';
+  }
+
+  // Sites
+  const container = document.getElementById('sites-container');
+  const siteIds = Object.keys(siteStats);
+  if (siteIds.length > 0) {
+    container.innerHTML = '';
+    siteIds.forEach((siteId, idx) => {
+      const s = siteStats[siteId];
+      const color = getSiteColor(siteId);
+      const name = s.cluster_name || siteId;
+      const scheduler = s.scheduler_type ? ` (${s.scheduler_type})` : '';
+      const workers = s.num_workers || 1;
+      const siteLabel = `Site ${idx + 1}`;
+      const icon = '&#9900;';
+      const avgMs = s.count > 0 ? Math.round(s.total_sim_ms / s.count) : 0;
+      const paths = s.total_paths || 0;
+      container.innerHTML += `
+        <div class="site-card">
+          <div class="site-icon" style="background:${color}20; color:${color};">${icon}</div>
+          <div class="site-info">
+            <div class="site-name">${name}${scheduler}</div>
+            <div class="site-detail">${siteLabel} &middot; ${workers} workers &middot; ${avgMs}ms avg &middot; ${fmtPaths(paths)} paths</div>
+          </div>
+          <div class="site-count" style="color:${color}">${s.count}</div>
+        </div>`;
+    });
+    updateHeaderLegend();
+  }
+
+  // Throughput recording
+  const now = Date.now() / 1000;
+  if (lastThroughputCheck === null) {
+    lastThroughputCheck = now;
+    siteIds.forEach(s => { lastBatchCounts[s] = siteStats[s].count || 0; });
+  } else if (now - lastThroughputCheck >= 1) {
+    const dt = now - lastThroughputCheck;
+    const perSite = {};
+    let total = 0;
+    siteIds.forEach(s => {
+      const current = siteStats[s].count || 0;
+      const prev = lastBatchCounts[s] || 0;
+      const rate = (current - prev) / dt;
+      perSite[s] = rate;
+      total += rate;
+      lastBatchCounts[s] = current;
+    });
+    throughputHistory.push({ ts: now, total, perSite });
+    lastThroughputCheck = now;
+    drawThroughput();
+  }
+}
+
+// WebSocket connection
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const basePath = location.pathname.replace(/\/$/, '');
+  const ws = new WebSocket(proto + '//' + location.host + basePath + '/ws');
+
+  ws.onopen = () => console.log('WS connected');
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+
+    if (msg.type === 'init') {
+      totalPaths = msg.total_paths || 0;
+      totalBatches = msg.total_batches || 0;
+      plannedBatches = msg.planned_batches || 0;
+      plannedPaths = msg.planned_paths || 0;
+      currentMean = msg.current_mean || 0;
+      bsPrice = msg.bs_price;
+      Object.assign(siteStats, msg.site_stats || {});
+      if (msg.config) updateConfig(msg.config);
+
+      // Fetch full state for late-join
+      if (totalBatches > 0) {
+        fetch(basePath + '/api/state').then(r => r.json()).then(data => {
+          totalPaths = data.total_paths;
+          totalBatches = data.total_batches;
+          plannedBatches = data.planned_batches;
+          plannedPaths = data.planned_paths;
+          currentMean = data.current_mean;
+          stdErr = data.std_err;
+          ciLow = data.ci_low;
+          ciHigh = data.ci_high;
+          histogramCounts = data.histogram_counts;
+          histogramEdges = data.histogram_edges;
+          convergenceData = data.convergence || [];
+          bsPrice = data.bs_price;
+          Object.assign(siteStats, data.site_stats || {});
+          if (data.config) updateConfig(data.config);
+          if (data.elapsed_s > 0 && !startTime) startTime = Date.now() / 1000 - data.elapsed_s;
+
+          // Load throughput history
+          if (data.throughput_history && data.throughput_history.length > 0) {
+            throughputHistory.length = 0;
+            const baseTs = startTime || (Date.now() / 1000 - data.elapsed_s);
+            data.throughput_history.forEach(b => {
+              throughputHistory.push({ ts: baseTs + b.ts_offset, total: b.total, perSite: b.perSite });
+            });
+            lastThroughputCheck = Date.now() / 1000;
+            Object.keys(siteStats).forEach(s => { lastBatchCounts[s] = siteStats[s].count || 0; });
+            drawThroughput();
+          }
+
+          drawHistogram();
+          drawConvergence();
+          updateUI(data.elapsed_s);
+        });
+      }
+    } else if (msg.type === 'batch') {
+      if (!startTime) startTime = Date.now() / 1000;
+      totalPaths = msg.total_paths;
+      totalBatches = msg.total_batches;
+      plannedBatches = msg.planned_batches;
+      plannedPaths = msg.planned_paths;
+      currentMean = msg.current_mean;
+      stdErr = msg.std_err;
+      ciLow = msg.ci_low;
+      ciHigh = msg.ci_high;
+      histogramCounts = msg.histogram_counts;
+      histogramEdges = msg.histogram_edges;
+      if (msg.convergence) convergenceData.push(msg.convergence);
+      if (msg.bs_price) bsPrice = msg.bs_price;
+      Object.assign(siteStats, msg.site_stats || {});
+
+      drawHistogram();
+      drawConvergence();
+      updateUI(msg.elapsed_s);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WS disconnected, reconnecting...');
+    setTimeout(connect, 2000);
+  };
+}
+
+// Handle resize
+function onResize() {
+  drawHistogram();
+  drawConvergence();
+  drawThroughput();
+}
+window.addEventListener('resize', onResize);
+
+// Init
+connect();
+setInterval(() => updateUI(), 1000);
+</script>
+</body>
+</html>
