@@ -334,6 +334,12 @@ jobs:
       # -----------------------------------------------------------------------
       # Resources
       # -----------------------------------------------------------------------
+      resources_header:
+        type: header
+        text: Compute Resources
+        size: 4
+        bold: true
+
       onprem_resource:
         type: compute-clusters
         label: On-Prem Resource (Dashboard + Simulate)
@@ -350,9 +356,15 @@ jobs:
       # -----------------------------------------------------------------------
       # Simulation Settings
       # -----------------------------------------------------------------------
+      simulation_header:
+        type: header
+        text: Simulation Settings
+        size: 4
+        bold: true
+
       simulation_settings:
         type: group
-        label: Simulation Settings
+        label: Option & Simulation Parameters
         items:
           option_type:
             type: dropdown
@@ -370,6 +382,77 @@ jobs:
                 label: European Put (Black-Scholes benchmark)
               - value: barrier_up_and_out_call
                 label: Barrier Up-and-Out Call
+
+          spot_price:
+            type: number
+            label: Spot Price (S0)
+            tooltip: Current price of the underlying asset
+            default: 100
+            min: 1
+            max: 500
+            step: 1
+            slider: true
+
+          strike_price:
+            type: number
+            label: Strike Price (K)
+            tooltip: Option strike price
+            default: 100
+            min: 1
+            max: 500
+            step: 1
+            slider: true
+
+          volatility:
+            type: number
+            label: Volatility (sigma)
+            tooltip: Annualized volatility (e.g., 0.2 = 20%)
+            default: 0.2
+            min: 0.01
+            max: 2.0
+            step: 0.01
+            slider: true
+
+          risk_free_rate:
+            type: number
+            label: Risk-Free Rate (r)
+            tooltip: Annualized risk-free interest rate (e.g., 0.05 = 5%)
+            default: 0.05
+            min: 0
+            max: 0.5
+            step: 0.01
+            slider: true
+
+          time_to_expiry:
+            type: number
+            label: Time to Expiry (T)
+            tooltip: Time to option expiry in years
+            default: 1.0
+            min: 0.1
+            max: 5.0
+            step: 0.1
+            slider: true
+
+          barrier_level:
+            type: number
+            label: Barrier Level
+            tooltip: Barrier price level — the option is knocked out if the underlying crosses this level
+            default: 150
+            min: 1
+            max: 500
+            step: 1
+            slider: true
+            hidden: ${{ inputs.simulation_settings.option_type != 'barrier_up_and_out_call' }}
+
+          monitoring_points:
+            type: number
+            label: Monitoring Points
+            tooltip: Number of time steps for path simulation (252 = daily for 1 year)
+            default: 252
+            min: 10
+            max: 1000
+            step: 1
+            slider: true
 
           total_simulations:
             type: dropdown
@@ -403,58 +486,6 @@ jobs:
               - value: "50000"
                 label: "50K paths/batch (large batches)"
 
-          spot_price:
-            type: number
-            label: Spot Price (S0)
-            tooltip: Current price of the underlying asset
-            default: 100
-            min: 1
-
-          strike_price:
-            type: number
-            label: Strike Price (K)
-            tooltip: Option strike price
-            default: 100
-            min: 1
-
-          volatility:
-            type: number
-            label: Volatility (sigma)
-            tooltip: Annualized volatility (e.g., 0.2 = 20%)
-            default: 0.2
-            min: 0.01
-            max: 2.0
-
-          risk_free_rate:
-            type: number
-            label: Risk-Free Rate (r)
-            tooltip: Annualized risk-free interest rate (e.g., 0.05 = 5%)
-            default: 0.05
-            min: 0
-            max: 1.0
-
-          time_to_expiry:
-            type: number
-            label: Time to Expiry (T)
-            tooltip: Time to option expiry in years
-            default: 1.0
-            min: 0.01
-
-          barrier_level:
-            type: number
-            label: Barrier Level
-            tooltip: Barrier level for barrier options (ignored for non-barrier types)
-            default: 150
-            min: 1
-
-          monitoring_points:
-            type: number
-            label: Monitoring Points
-            tooltip: Number of time steps for path simulation (252 = daily for 1 year)
-            default: 252
-            min: 10
-            max: 1000
-
           parallelism:
             type: dropdown
             label: Worker Threads
@@ -473,6 +504,13 @@ jobs:
       # -----------------------------------------------------------------------
       # Scheduler
       # -----------------------------------------------------------------------
+      scheduler_header:
+        type: header
+        text: Scheduler
+        size: 4
+        bold: true
+        hidden: ${{ inputs.cloud_resource.schedulerType != 'slurm' && inputs.cloud_resource.schedulerType != 'pbs' }}
+
       submit_cloud_to_scheduler:
         type: boolean
         label: Submit Cloud Job to Scheduler
