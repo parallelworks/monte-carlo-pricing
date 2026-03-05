@@ -4,6 +4,17 @@ A turnkey demo workflow for [Parallel Works ACTIVATE](https://www.parallel.works
 
 ![Thumbnail](thumbnail.png)
 
+## Why Monte Carlo for Options Pricing?
+
+Closed-form solutions like Black-Scholes work well for simple European options, but most real-world derivatives don't have analytical formulas. **Monte Carlo simulation is the standard approach** for pricing complex options because it handles what closed-form models cannot:
+
+- **Path-dependent options** — Asian options depend on the *average* price over the life of the contract, not just the terminal price. There is no closed-form solution under standard geometric Brownian motion, so simulation is the practical method for pricing them.
+- **Barrier options** — Knock-out and knock-in options depend on whether the price *ever* crosses a threshold during the contract. Pricing these requires simulating the full path, not just the endpoint.
+- **Flexible modeling** — Monte Carlo naturally accommodates stochastic volatility, jump diffusion, multiple correlated underlyings, and other features that break analytical tractability. Adding complexity to the model means changing the path generator, not deriving a new formula.
+- **Risk measurement** — Simulation produces a full distribution of outcomes (as shown in the dashboard's payoff histogram), not just a single price. This enables direct computation of Value-at-Risk, expected shortfall, and other tail-risk metrics that regulators and risk managers require.
+
+The tradeoff is compute: Monte Carlo convergence scales as O(1/√N), meaning 100× more paths are needed for 10× more precision. This makes it a natural fit for parallel and distributed computing — exactly what this workflow demonstrates by splitting paths across multiple sites.
+
 ## What It Does
 
 1. **Splits simulation** across two ACTIVATE resources (e.g., an on-prem GPU server + a cloud Slurm cluster)
