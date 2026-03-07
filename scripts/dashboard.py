@@ -33,6 +33,7 @@ state = {
     "convergence": [],       # [{paths, mean, ci_low, ci_high, std_err}]
     # Site stats
     "site_stats": {},        # site_id -> {count, total_sim_ms, cluster_name, ...}
+    "pending_sites": {},     # site_id -> {cluster_name, scheduler_type, timestamp}
     "start_time": None,
     "bs_price": None,        # Black-Scholes reference (for European options)
 }
@@ -49,6 +50,7 @@ def _reset_state():
     state["histogram_edges"] = None
     state["convergence"] = []
     state["site_stats"] = {}
+    state["pending_sites"] = {}
     state["start_time"] = None
     state["bs_price"] = None
 
@@ -94,6 +96,21 @@ async def set_config(request: Request):
     state["planned_batches"] = body.get("total_batches", 0)
     state["planned_paths"] = body.get("total_simulations", 0)
     return {"status": "ok", "config": body}
+
+
+@app.post("/api/worker/pending")
+async def worker_pending(request: Request):
+    """Register a site as pending (dispatched but not yet sending batches)."""
+    data = await request.json()
+    site_id = data.get("site_id", "unknown")
+    cluster_name = data.get("cluster_name", "unknown")
+    scheduler_type = data.get("scheduler_type", "ssh")
+    state["pending_sites"][site_id] = {
+        "cluster_name": cluster_name,
+        "scheduler_type": scheduler_type,
+        "timestamp": time.time(),
+    }
+    return {"status": "ok"}
 
 
 @app.post("/api/batch")
